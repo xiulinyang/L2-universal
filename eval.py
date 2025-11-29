@@ -26,10 +26,7 @@ def read_data(data_path):
 
 def eval_sent_pair(ilm_model, tokenizer, test_set):
     results = {}
-    distributions = {}
     for phe, sents in tqdm(test_set.items()):
-        correct = 0
-        distribution = []
         s1_pref = 0
         s2_pref = 0
         s3_pref = 0
@@ -45,7 +42,7 @@ def eval_sent_pair(ilm_model, tokenizer, test_set):
                     s1_pref +=1
                 else:
                     s2_pref +=1
-            if len(sent)==3:
+            elif len(sent)==3:
                 num_token0 = len(tokenizer.encode(sent[0], add_special_tokens=False))
                 num_token1 = len(tokenizer.encode(sent[1], add_special_tokens=False))
                 num_token2 = len(tokenizer.encode(sent[2],add_special_tokens=False))
@@ -54,38 +51,44 @@ def eval_sent_pair(ilm_model, tokenizer, test_set):
                 ppl0 = nll0 / num_token0
                 ppl1 = nll1 / num_token1
                 ppl2 = nll2 / num_token2
-                if ppl0 < ppl1 and ppl0 < ppl2:
+                best = min(ppl0, ppl1, ppl2)
+                if ppl0 == best:
                     s1_pref += 1
-                elif ppl1 < ppl0 and ppl1 < ppl2:
+                elif ppl1 == best:
                     s2_pref += 1
                 else:
                     s3_pref += 1
+            else:
+                raise ValueError('Only support sentence pairs or triplets!')
         s1_f = s1_pref / len(sents)
         s2_f = s2_pref / len(sents)
         s3_f = s3_pref / len(sents)
         acc = {'s1_pref': s1_f, 's2_pref': s2_f, 's3_pref': s3_f}
         results[phe] = acc
         print(phe, acc)
-    return results, distributions
+    return results
 
 if __name__ == '__main__':
-    args = argparse.ArgumentParser('eval language models')
-    args.add_argument('model_name', type=str, help='model name')
-    args = args.parse_args()
+    parser = argparse.ArgumentParser('eval language models')
+    parser.add_argument('model_name', type=str, help='model name')
+    args = parser.parse_args()
     os.makedirs(f'results', exist_ok=True)
     model_name = args.model_name
-    best_checkpoint = args.best_checkpoint
     refs = list_repo_refs(model_name, repo_type="model")
     num_checkpoints = refs.branches
-    checkpoints = sorted([x.name for x in num_checkpoints if 'main' not in x.name], key=lambda x: int(x.split('-')[-1]))
+    checkpoints = sorted([x.name for x in num_checkpoints if 'main' not in x.name], key=lambda x: int(x))
     test = read_data(f'eval_data')
     model_name_name = model_name.split('/')[-1]
-    f_results = {}
-    for checkpoint in checkpoints:
-        results = {}
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    all_rows = []
+    for checkpoint in tqdm(checkpoints):
         print(model_name, checkpoint)
-        ilm_model = scorer.IncrementalLMScorer(model_name, 'cpu',revision=checkpoint)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        acc, dist = eval_sent_pair(ilm_model, tokenizer, test)
-        results[checkpoint] = acc
-        pd.DataFrame(results).to_csv(f'results/results_{model_name_name}_ckpt{checkpoint}.csv')
+        ilm_model = scorer.IncrementalLMScorer(model_name, 'cpu', revision=checkpoint)
+        acc= eval_sent_pair(ilm_model, tokenizer, test)
+        for phe, metrics in acc.items():
+            row = {'checkpoint': checkpoint, 'phenomenon': phe}
+            row.update(metrics)
+            all_rows.append(row)
+
+    df = pd.DataFrame(all_rows)
+    df.to_csv(f'results/results_{model_name_name}_all_checkpoints.csv', index=False)
